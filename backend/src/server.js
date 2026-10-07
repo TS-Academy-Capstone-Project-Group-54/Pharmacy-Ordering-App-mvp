@@ -49,7 +49,7 @@ app.use((err, _req, res, _next) => {
   return res.status(500).json({ success: false, message: 'Internal server error', data: null });
 });
 
-const port = process.env.PORT || 5000;
+const port = Number(process.env.PORT || 5000);
 
 ensureSeeded().catch((e) => console.error('Seed bootstrap failed:', e));
 
