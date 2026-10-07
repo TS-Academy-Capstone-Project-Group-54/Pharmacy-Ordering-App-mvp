@@ -1,0 +1,60 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --ring: #10b981;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+.skip-link {
+  position: fixed;
+  left: 1rem;
+  top: -120px;
+  z-index: 100;
+  background: #111827;
+  color: #fff;
+  padding: 0.6rem 0.9rem;
+  border-radius: 0.6rem;
+  transition: top 0.2s ease;
+}
+.skip-link:focus {
+  top: 1rem;
+}
+
+button, a {
+  transition: all 0.2s ease;
+}
+
+.fade-in {
+  animation: fadeIn 0.4s ease;
+}
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+html.route-restoring body {
+  opacity: 0;
+}
+
+@media print {
+  header,
+  footer,
+  .skip-link,
+  button,
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #fff !important;
+    color: #000 !important;
+    font-size: 12pt;
+  }
+  a::after {
+    content: " (" attr(href) ")";
+    font-size: 10pt;
+  }
+}
