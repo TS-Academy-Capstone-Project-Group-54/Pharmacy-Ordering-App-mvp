@@ -13,7 +13,7 @@ cp .env.example .env.local
 Set `frontend/.env.local`:
 
 ```env
-NEXT_PUBLIC_API_BASE_URL=http://localhost:5000
+NEXT_PUBLIC_API_BASE_URL=https://pharmacy-ordering-app-api.onrender.com/
 ```
 
 Then run:
@@ -33,7 +33,7 @@ Frontend: `http://localhost:3000`
 3. Add env var:
 
 ```env
-NEXT_PUBLIC_API_BASE_URL=https://<your-render-backend>.onrender.com
+NEXT_PUBLIC_API_BASE_URL=https://pharmacy-ordering-app-api.onrender.com/
 ```
 
 4. Deploy.
