@@ -32,14 +32,30 @@ router.get('/', async (req, res) => {
   const where = clauses.length ? `where ${clauses.join(' and ')}` : '';
 
   const rows = await pool.query(
-    `select m.*, c.name as category_name
-     from medicines m
-     left join categories c on c.id = m.category_id
-     ${where}
-     order by m.name asc
-     limit ${limit} offset ${offset}`,
-    vals,
-  );
+  `select
+    m.id,
+    m.name,
+    m.generic_name as "genericName",
+    m.description,
+    m.category_id as "categoryId",
+    c.name as "categoryName",
+    m.price,
+    m.quantity_in_stock as "quantityInStock",
+    m.dosage,
+    m.manufacturer,
+    m.image,
+    m.expiry_date as "expiryDate",
+    m.requires_prescription as "requiresPrescription",
+    m.is_available as "isAvailable",
+    m.created_at as "createdAt",
+    m.updated_at as "updatedAt"
+   from medicines m
+   left join categories c on c.id = m.category_id
+   ${where}
+   order by m.name asc
+   limit ${limit} offset ${offset}`,
+  vals,
+);
 
   const total = await pool.query(`select count(*)::int as count from medicines m ${where}`, vals);
 
@@ -89,9 +105,29 @@ router.post('/', requireAuth, requireAdmin, async (req, res) => {
 
 router.get('/:id', async (req, res) => {
   const q = await pool.query(
-    `select m.*, c.name as category_name from medicines m left join categories c on c.id=m.category_id where m.id=$1 limit 1`,
-    [req.params.id],
-  );
+  `select
+    m.id,
+    m.name,
+    m.generic_name as "genericName",
+    m.description,
+    m.category_id as "categoryId",
+    c.name as "categoryName",
+    m.price,
+    m.quantity_in_stock as "quantityInStock",
+    m.dosage,
+    m.manufacturer,
+    m.image,
+    m.expiry_date as "expiryDate",
+    m.requires_prescription as "requiresPrescription",
+    m.is_available as "isAvailable",
+    m.created_at as "createdAt",
+    m.updated_at as "updatedAt"
+   from medicines m
+   left join categories c on c.id = m.category_id
+   where m.id=$1
+   limit 1`,
+  [req.params.id],
+);
   if (q.rowCount === 0) return fail(res, 'Medicine not found', 404);
   return ok(res, 'Medicine loaded', q.rows[0]);
 });
