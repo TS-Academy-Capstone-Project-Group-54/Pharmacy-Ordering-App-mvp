@@ -7,10 +7,23 @@ const { requireAuth, JWT_SECRET } = require('../middleware/auth');
 
 const router = express.Router();
 
+// Email validation regex
+const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// Validate email format
+function isValidEmail(email) {
+  return emailRegex.test(String(email).trim().toLowerCase());
+}
+
 router.post('/register', async (req, res) => {
   try {
     const { fullName, email, password, phoneNumber, address } = req.body || {};
     if (!fullName || !email || !password || !phoneNumber || !address) return fail(res, 'Unable to create your account.', 400);
+
+    // Add email format validation
+    if (!isValidEmail(email)) {
+      return fail(res, 'Please provide a valid email address.', 400);
+    }
 
     const normalizedEmail = String(email).trim().toLowerCase();
     const existing = await pool.query('select id from users where email=$1 limit 1', [normalizedEmail]);
@@ -38,6 +51,11 @@ router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body || {};
     if (!email || !password) return fail(res, 'Invalid email or password.', 400);
+
+    // Add email format validation for login
+    if (!isValidEmail(email)) {
+      return fail(res, 'Invalid email or password.', 400);
+    }
 
     const normalizedEmail = String(email).trim().toLowerCase();
     const result = await pool.query('select id, full_name, email, role, password_hash from users where email=$1 limit 1', [normalizedEmail]);
