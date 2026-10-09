@@ -56,7 +56,7 @@ export async function setSessionCookie(token: string) {
 export async function clearSessionCookie() {
   try {
     const store = await cookies();
-    store.delete(COOKIE_NAME, { path: "/" });
+    store.delete(COOKIE_NAME);
   } catch {
     // Ignore
   }
