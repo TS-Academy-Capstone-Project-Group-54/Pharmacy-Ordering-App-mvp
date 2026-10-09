@@ -5,10 +5,79 @@ const { requireAuth, requireAdmin } = require('../middleware/auth');
 
 const router = express.Router();
 
+const normalizeOrderItems = (items = []) => {
+  if (!Array.isArray(items) || items.length === 0) {
+    throw new Error('empty-items');
+  }
+
+  const normalized = [];
+  const seen = new Set();
+
+  for (const item of items) {
+    if (!item || typeof item !== 'object') {
+      throw new Error('invalid-item');
+    }
+
+    const medicineId = Number(item.medicineId ?? item.medicine_id);
+    const quantity = Number(item.quantity);
+
+    if (!Number.isFinite(medicineId) || medicineId <= 0) {
+      throw new Error('invalid-item');
+    }
+
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      throw new Error('invalid-quantity');
+    }
+
+    if (seen.has(medicineId)) {
+      throw new Error('duplicate-item');
+    }
+
+    seen.add(medicineId);
+    normalized.push({ medicineId, quantity });
+  }
+
+  return normalized;
+};
+
 router.post('/', requireAuth, async (req, res) => {
-  const { deliveryAddress, phoneNumber, paymentStatus = 'Pending', items = [] } = req.body || {};
-  if (!deliveryAddress || !phoneNumber || !Array.isArray(items) || items.length === 0) {
-    return fail(res, 'Order could not be placed.', 400);
+  const deliveryAddress = String(req.body?.deliveryAddress ?? '').trim();
+  const phoneNumber = String(req.body?.phoneNumber ?? '').trim();
+  const paymentStatus = String(req.body?.paymentStatus ?? 'Pending').trim();
+  const items = req.body?.items ?? [];
+
+  const allowedPaymentStatuses = ['Pending', 'Paid', 'Cash on Delivery', 'Card'];
+
+  if (!deliveryAddress || deliveryAddress.length < 5) {
+    return fail(res, 'Please add a valid delivery address before placing the order.', 400);
+  }
+
+  if (!phoneNumber || phoneNumber.length < 7) {
+    return fail(res, 'Please provide a valid phone number for delivery updates.', 400);
+  }
+
+  if (!allowedPaymentStatuses.includes(paymentStatus)) {
+    return fail(res, 'Please select a valid payment status for this order.', 400);
+  }
+
+  let normalizedItems;
+  try {
+    normalizedItems = normalizeOrderItems(items);
+  } catch (error) {
+    const message = String(error.message || '');
+    if (message === 'empty-items') {
+      return fail(res, 'Please add at least one medicine before placing an order.', 400);
+    }
+    if (message === 'invalid-item') {
+      return fail(res, 'Each selected medicine must include a valid medicine ID.', 400);
+    }
+    if (message === 'invalid-quantity') {
+      return fail(res, 'Quantity must be a whole number greater than zero for every medicine.', 400);
+    }
+    if (message === 'duplicate-item') {
+      return fail(res, 'You cannot add the same medicine more than once in the same order.', 400);
+    }
+    return fail(res, 'Your order details are incomplete or invalid.', 400);
   }
 
   const client = await pool.connect();
@@ -18,16 +87,16 @@ router.post('/', requireAuth, async (req, res) => {
     let total = 0;
     const prepared = [];
 
-    for (const item of items) {
+    for (const item of normalizedItems) {
       const medQ = await client.query('select * from medicines where id=$1 limit 1', [item.medicineId]);
       if (medQ.rowCount === 0) throw new Error('not-found');
       const med = medQ.rows[0];
-      const qty = Number(item.quantity);
-      if (!med.is_available || med.quantity_in_stock < qty) throw new Error('insufficient-stock');
+      if (!med.is_available || med.quantity_in_stock < item.quantity) throw new Error('insufficient-stock');
+
       const unitPrice = Number(med.price);
-      const subtotal = unitPrice * qty;
+      const subtotal = unitPrice * item.quantity;
       total += subtotal;
-      prepared.push({ med, qty, unitPrice, subtotal });
+      prepared.push({ med, qty: item.quantity, unitPrice, subtotal });
     }
 
     const orderQ = await client.query(
@@ -50,9 +119,9 @@ router.post('/', requireAuth, async (req, res) => {
     return ok(res, 'Order placed successfully', order);
   } catch (e) {
     await client.query('ROLLBACK');
-    if (String(e.message).includes('insufficient-stock')) return fail(res, 'Insufficient stock.', 400);
+    if (String(e.message).includes('insufficient-stock')) return fail(res, 'One or more selected medicines are unavailable or out of stock.', 400);
     if (String(e.message).includes('not-found')) return fail(res, 'One or more selected medicines are unavailable.', 400);
-    return fail(res, 'Order could not be placed.', 500);
+    return fail(res, 'Order could not be placed. Please review your basket and try again.', 500);
   } finally {
     client.release();
   }
@@ -81,21 +150,21 @@ router.get('/my-orders', requireAuth, async (req, res) => {
 
 router.get('/:id', requireAuth, async (req, res) => {
   const orderQ = await pool.query(
-  `select
-     id,
-     customer_id as "customerId",
-     total_amount as "totalAmount",
-     delivery_address as "deliveryAddress",
-     phone_number as "phoneNumber",
-     order_status as "orderStatus",
-     payment_status as "paymentStatus",
-     created_at as "createdAt",
-     updated_at as "updatedAt"
-   from orders
-   where id=$1
-   limit 1`,
-  [req.params.id]
-);
+    `select
+      id,
+      customer_id as "customerId",
+      total_amount as "totalAmount",
+      delivery_address as "deliveryAddress",
+      phone_number as "phoneNumber",
+      order_status as "orderStatus",
+      payment_status as "paymentStatus",
+      created_at as "createdAt",
+      updated_at as "updatedAt"
+    from orders
+    where id=$1
+    limit 1`,
+    [req.params.id]
+  );
   if (orderQ.rowCount === 0) return fail(res, 'Order not found', 404);
   const order = orderQ.rows[0];
 
@@ -103,20 +172,20 @@ router.get('/:id', requireAuth, async (req, res) => {
     return fail(res, 'You do not have permission to perform this action.', 403);
   }
 
- const items = await pool.query(
-  `select
-     id,
-     order_id as "orderId",
-     medicine_id as "medicineId",
-     medicine_name as "medicineName",
-     quantity,
-     unit_price as "unitPrice",
-     subtotal,
-     created_at as "createdAt"
-   from order_items
-   where order_id=$1`,
-  [order.id]
-);
+  const items = await pool.query(
+    `select
+      id,
+      order_id as "orderId",
+      medicine_id as "medicineId",
+      medicine_name as "medicineName",
+      quantity,
+      unit_price as "unitPrice",
+      subtotal,
+      created_at as "createdAt"
+    from order_items
+    where order_id=$1`,
+    [order.id]
+  );
   return ok(res, 'Order details loaded', { ...order, items: items.rows });
 });
 
@@ -139,7 +208,7 @@ router.get('/', requireAuth, requireAdmin, async (req, res) => {
   );
 
   const rows = search
-    ? q.rows.filter((r) => (r.customer_name || '').toLowerCase().includes(search) || r.id.includes(search))
+    ? q.rows.filter((r) => (r.customer_name || '').toLowerCase().includes(search) || String(r.id).includes(search))
     : q.rows;
 
   return ok(res, 'Orders loaded', {
@@ -176,3 +245,4 @@ router.patch('/:id/status', requireAuth, requireAdmin, async (req, res) => {
 });
 
 module.exports = router;
+
