@@ -7,6 +7,7 @@ const secret = process.env.JWT_SECRET ?? "dev_insecure_secret_change_me";
 const key = new TextEncoder().encode(secret);
 
 const COOKIE_NAME = "group54_session";
+const isProduction = process.env.NODE_ENV === "production" || process.env.VERCEL === "1";
 
 export async function hashPassword(password: string) {
   return bcrypt.hash(password, 10);
@@ -38,11 +39,11 @@ export async function setSessionCookie(token: string) {
     const store = await cookies();
     const hdrs = await headers();
     const proto = hdrs.get("x-forwarded-proto") ?? "";
-    const isHttps = proto.includes("https");
+    const isHttps = proto.includes("https") || (typeof window !== "undefined" && window.location.protocol === "https:") || isProduction;
 
     store.set(COOKIE_NAME, token, {
       httpOnly: false,
-      sameSite: isHttps ? "none" : "lax",
+      sameSite: "lax",
       secure: isHttps,
       path: "/",
       maxAge: 60 * 60 * 24 * 7,
@@ -55,7 +56,7 @@ export async function setSessionCookie(token: string) {
 export async function clearSessionCookie() {
   try {
     const store = await cookies();
-    store.delete(COOKIE_NAME);
+    store.delete(COOKIE_NAME, { path: "/" });
   } catch {
     // Ignore
   }
