@@ -11,6 +11,11 @@ function normalizeString(value) {
   return String(value).trim();
 }
 
+function isValidUUID(value) {
+  if (typeof value !== 'string') return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
 function validateMedicinePayload(payload, { allowPartial = false } = {}) {
   const errors = [];
   const data = payload || {};
@@ -68,9 +73,9 @@ function validateMedicinePayload(payload, { allowPartial = false } = {}) {
   }
 
   if (data.categoryId !== undefined && data.categoryId !== null && data.categoryId !== '') {
-    const categoryId = Number(data.categoryId);
-    if (!Number.isInteger(categoryId) || categoryId < 1) {
-      errors.push('Category ID must be a positive number.');
+    const categoryId = normalizeString(data.categoryId);
+    if (!isValidUUID(categoryId)) {
+      errors.push('Category ID must be a valid UUID.');
     }
   }
 
@@ -106,20 +111,28 @@ router.get('/', async (req, res) => {
   const clauses = ['m.is_available = true'];
   const vals = [];
   let i = 1;
+
   if (search) {
     clauses.push(`(m.name ilike $${i} or m.generic_name ilike $${i + 1})`);
     vals.push(`%${search}%`, `%${search}%`);
     i += 2;
   }
+
   if (category) {
     clauses.push(`m.category_id = $${i}`);
     vals.push(category);
     i += 1;
   }
-  if (availability === 'in-stock') clauses.push('m.quantity_in_stock > 0');
-  if (availability === 'out-of-stock') clauses.push('m.quantity_in_stock = 0');
 
-  const where = clauses.length ? `where ${clauses.join(' and ')}` : '';
+  if (availability === 'in-stock') {
+    clauses.push('m.quantity_in_stock > 0');
+  }
+
+  if (availability === 'out-of-stock') {
+    clauses.push('m.quantity_in_stock = 0');
+  }
+
+  const where = `where ${clauses.join(' and ')}`;
 
   const rows = await pool.query(
     `select
@@ -143,8 +156,8 @@ router.get('/', async (req, res) => {
      left join categories c on c.id = m.category_id
      ${where}
      order by m.name asc
-     limit ${limit} offset ${offset}`,
-    vals,
+     limit $${i} offset $${i + 1}`,
+    [...vals, limit, offset],
   );
 
   const total = await pool.query(`select count(*)::int as count from medicines m ${where}`, vals);
@@ -169,15 +182,31 @@ router.post('/', requireAuth, requireAdmin, async (req, res) => {
     }
 
     const q = await pool.query(
-      `insert into medicines (name,generic_name,description,category_id,price,quantity_in_stock,dosage,manufacturer,image,expiry_date,requires_prescription,is_available)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-       returning *`,
+      `insert into medicines
+      (name, generic_name, description, category_id, price, quantity_in_stock, dosage, manufacturer, image, expiry_date, requires_prescription, is_available)
+      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      returning
+        id,
+        name,
+        generic_name as "genericName",
+        description,
+        category_id as "categoryId",
+        price,
+        quantity_in_stock as "quantityInStock",
+        dosage,
+        manufacturer,
+        image,
+        expiry_date as "expiryDate",
+        requires_prescription as "requiresPrescription",
+        is_available as "isAvailable",
+        created_at as "createdAt",
+        updated_at as "updatedAt"`,
       [
         normalizeString(b.name),
         normalizeString(b.genericName),
         normalizeString(b.description),
-        b.categoryId === undefined || b.categoryId === null || b.categoryId === '' ? null : Number(b.categoryId),
-        String(Number(b.price)),
+        b.categoryId || null,
+        Number(b.price),
         Number(b.quantityInStock),
         normalizeString(b.dosage),
         normalizeString(b.manufacturer),
@@ -196,9 +225,9 @@ router.post('/', requireAuth, requireAdmin, async (req, res) => {
 });
 
 router.get('/:id', async (req, res) => {
-  const medicineId = Number(req.params.id);
-  if (!Number.isInteger(medicineId) || medicineId <= 0) {
-    return fail(res, 'Medicine ID must be a positive integer.', 400);
+  const medicineId = normalizeString(req.params.id);
+  if (!isValidUUID(medicineId)) {
+    return fail(res, 'Medicine ID must be a valid UUID.', 400);
   }
 
   const q = await pool.query(
@@ -225,28 +254,66 @@ router.get('/:id', async (req, res) => {
      limit 1`,
     [medicineId],
   );
-  if (q.rowCount === 0) return fail(res, 'Medicine not found', 404);
+
+  if (q.rowCount === 0) {
+    return fail(res, 'Medicine not found', 404);
+  }
+
   return ok(res, 'Medicine loaded', q.rows[0]);
 });
 
 router.put('/:id', requireAuth, requireAdmin, async (req, res) => {
   try {
-    const b = req.body || {};
-    const validation = validateMedicinePayload(b, { allowPartial: true });
+    const medicineId = normalizeString(req.params.id);
+    if (!isValidUUID(medicineId)) {
+      return fail(res, 'Medicine ID must be a valid UUID.', 400);
+    }
+
+    const validation = validateMedicinePayload(req.body, { allowPartial: true });
     if (!validation.valid) {
       return fail(res, validation.errors.join(' '), 400);
     }
 
+    const b = req.body || {};
     const q = await pool.query(
-      `update medicines set
-        name=$1,generic_name=$2,description=$3,category_id=$4,price=$5,quantity_in_stock=$6,dosage=$7,manufacturer=$8,image=$9,expiry_date=$10,requires_prescription=$11,is_available=$12,updated_at=now()
-        where id=$13 returning *`,
+      `update medicines
+       set
+         name=$1,
+         generic_name=$2,
+         description=$3,
+         category_id=$4,
+         price=$5,
+         quantity_in_stock=$6,
+         dosage=$7,
+         manufacturer=$8,
+         image=$9,
+         expiry_date=$10,
+         requires_prescription=$11,
+         is_available=$12,
+         updated_at=now()
+       where id=$13
+       returning
+         id,
+         name,
+         generic_name as "genericName",
+         description,
+         category_id as "categoryId",
+         price,
+         quantity_in_stock as "quantityInStock",
+         dosage,
+         manufacturer,
+         image,
+         expiry_date as "expiryDate",
+         requires_prescription as "requiresPrescription",
+         is_available as "isAvailable",
+         created_at as "createdAt",
+         updated_at as "updatedAt"`,
       [
         normalizeString(b.name),
         normalizeString(b.genericName),
         normalizeString(b.description),
-        b.categoryId === undefined || b.categoryId === null || b.categoryId === '' ? null : Number(b.categoryId),
-        String(Number(b.price)),
+        b.categoryId || null,
+        Number(b.price),
         Number(b.quantityInStock),
         normalizeString(b.dosage),
         normalizeString(b.manufacturer),
@@ -254,10 +321,14 @@ router.put('/:id', requireAuth, requireAdmin, async (req, res) => {
         new Date(b.expiryDate),
         !!b.requiresPrescription,
         b.isAvailable !== false,
-        req.params.id,
+        medicineId,
       ],
     );
-    if (q.rowCount === 0) return fail(res, 'Medicine not found', 404);
+
+    if (q.rowCount === 0) {
+      return fail(res, 'Medicine not found', 404);
+    }
+
     return ok(res, 'Medicine updated successfully', q.rows[0]);
   } catch (error) {
     console.error('Update medicine error:', error);
@@ -266,11 +337,20 @@ router.put('/:id', requireAuth, requireAdmin, async (req, res) => {
 });
 
 router.delete('/:id', requireAuth, requireAdmin, async (req, res) => {
+  const medicineId = normalizeString(req.params.id);
+  if (!isValidUUID(medicineId)) {
+    return fail(res, 'Medicine ID must be a valid UUID.', 400);
+  }
+
   const q = await pool.query(
     'update medicines set is_available=false, quantity_in_stock=0, updated_at=now() where id=$1 returning *',
-    [req.params.id],
+    [medicineId],
   );
-  if (q.rowCount === 0) return fail(res, 'Medicine not found', 404);
+
+  if (q.rowCount === 0) {
+    return fail(res, 'Medicine not found', 404);
+  }
+
   return ok(res, 'Medicine deactivated', q.rows[0]);
 });
 
