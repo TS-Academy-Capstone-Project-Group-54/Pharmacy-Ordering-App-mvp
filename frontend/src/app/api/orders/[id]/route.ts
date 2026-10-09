@@ -2,7 +2,7 @@ import { db } from "@/db";
 import { orderItems, orders } from "@/db/schema";
 import { fail, ok } from "@/lib/api";
 import { requireAuth } from "@/lib/route-auth";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireAuth(req);
@@ -17,6 +17,18 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     return fail("You do not have permission to perform this action.", 403);
   }
 
-  const items = await db.select().from(orderItems).where(eq(orderItems.orderId, order.id));
+  const items = await db
+    .select({
+      id: orderItems.id,
+      orderId: orderItems.orderId,
+      medicineId: orderItems.medicineId,
+      medicineName: orderItems.medicineName,
+      quantity: orderItems.quantity,
+      unitPrice: orderItems.unitPrice,
+      subtotal: orderItems.subtotal,
+    })
+    .from(orderItems)
+    .where(eq(orderItems.orderId, order.id));
+
   return ok("Order details loaded", { ...order, items });
 }
