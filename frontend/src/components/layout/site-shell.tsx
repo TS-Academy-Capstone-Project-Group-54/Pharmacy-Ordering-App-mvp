@@ -10,15 +10,15 @@ export function SiteShell({ children }: { children: React.ReactNode }) {
   return (
     <>
       <RoutePersistence />
-      <a href="#main-content" className="skip-link">
-        Skip to content
-      </a>
+      <a href="#main-content" className="skip-link">Skip to content</a>
       <ScrollProgressBar />
       <Header />
-      <main id="main-content" className="mx-auto min-h-[70vh] w-full max-w-6xl px-4 py-8">
-        {children}
-      </main>
-      <Footer />
+      <div className="md:pl-64">
+        <main id="main-content" className="mx-auto min-h-[70vh] w-full max-w-6xl px-4 py-8 md:px-6">
+          {children}
+        </main>
+        <Footer />
+      </div>
       <BackToTop />
       <FloatingContactButton />
       <CookieBanner />
