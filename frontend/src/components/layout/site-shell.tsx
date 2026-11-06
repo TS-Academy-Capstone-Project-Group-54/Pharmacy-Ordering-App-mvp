@@ -1,6 +1,7 @@
 import { Header } from "@/components/layout/header";
 import { Footer } from "@/components/layout/footer";
 import { ScrollProgressBar } from "@/components/ui/scroll-progress";
+import { ScrollReveal } from "@/components/ui/scroll-reveal";
 import { BackToTop } from "@/components/ui/back-to-top";
 import { CookieBanner } from "@/components/ui/cookie-banner";
 import { FloatingContactButton } from "@/components/ui/floating-contact";
@@ -10,6 +11,7 @@ export function SiteShell({ children }: { children: React.ReactNode }) {
   return (
     <>
       <RoutePersistence />
+      <ScrollReveal />
       <a href="#main-content" className="skip-link">Skip to content</a>
       <ScrollProgressBar />
       <Header />

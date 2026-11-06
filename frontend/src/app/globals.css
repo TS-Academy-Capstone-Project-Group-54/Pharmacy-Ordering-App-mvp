@@ -47,6 +47,26 @@ html.route-restoring body {
   opacity: 0;
 }
 
+main.scroll-reveal-enabled .scroll-reveal-item {
+  opacity: 0;
+  transform: translateY(22px);
+  transition: opacity 550ms ease var(--scroll-reveal-delay, 0ms), transform 550ms ease var(--scroll-reveal-delay, 0ms);
+}
+
+main.scroll-reveal-enabled .scroll-reveal-item.scroll-reveal-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  main.scroll-reveal-enabled .scroll-reveal-item,
+  main.scroll-reveal-enabled .scroll-reveal-item.scroll-reveal-visible {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}
+
 @media print {
   header,
   footer,
