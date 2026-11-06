@@ -7,6 +7,10 @@ import { SiteShell } from "@/components/layout/site-shell";
 export const metadata: Metadata = {
   title: "NaijaCare Pharmacy Ordering App",
   description: "Nigerian pharmacy ordering platform for customers and admins.",
+  icons: {
+    icon: "/naijacare-favicon.svg",
+    shortcut: "/naijacare-favicon.svg",
+  },
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

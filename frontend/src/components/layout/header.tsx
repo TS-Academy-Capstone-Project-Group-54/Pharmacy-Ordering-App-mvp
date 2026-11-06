@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAuth } from "@/context/auth-context";
 import { useCart } from "@/context/cart-context";
 import { useTheme } from "@/context/theme-context";
@@ -34,7 +35,7 @@ function ThemeIcon({ theme }: { theme: "light" | "dark" }) {
 }
 
 function MenuIcon() {
-  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true" className="h-6 w-6"><path d="M4 6h16M4 12h16M4 18h16"/></svg>;
+  return <svg viewBox="0 0 48 48" fill="none" aria-hidden="true" className="h-7 w-7"><path d="M6 10h36M6 24h36M6 38h36" stroke="currentColor" strokeWidth="6" strokeLinecap="round"/></svg>;
 }
 
 export function Header() {
@@ -46,6 +47,15 @@ export function Header() {
   const cartCount = items.reduce((sum, item) => sum + item.quantity, 0);
   const themeLabel = theme === "light" ? "Switch to dark mode" : "Switch to light mode";
   const isActive = (href: string) => href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(`${href}/`);
+
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMobileOpen(false);
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [mobileOpen]);
 
   const links: { href: string; label: string; icon: IconName }[] = [
     { href: "/", label: "Home", icon: "home" },
@@ -85,9 +95,8 @@ export function Header() {
   return (
     <>
       <aside className="fixed inset-y-0 left-0 z-40 hidden w-64 flex-col border-r border-slate-200 bg-white px-4 py-5 dark:border-slate-800 dark:bg-slate-950 md:flex">
-        <Link href="/" className="mb-8 flex items-center gap-3 px-2 text-lg font-bold text-slate-900 dark:text-white">
-          <span className="grid h-10 w-10 place-items-center rounded-xl bg-blue-600 text-white" aria-hidden="true">N</span>
-          <span>NaijaCare<small className="block text-xs font-normal text-slate-500 dark:text-slate-400">Pharmacy</small></span>
+        <Link href="/" className="mb-8 flex items-center px-1" aria-label="NaijaCare Pharmacy home">
+          <Image src="/images/naijacare-logo.svg" alt="NaijaCare Pharmacy — Trusted Across Nigeria" width={220} height={78} priority className="h-auto w-full max-w-[220px]" />
         </Link>
         <nav aria-label="Main navigation" className="flex-1 space-y-1">{navLinks()}</nav>
         <div className="mt-5 border-t border-slate-200 pt-4 dark:border-slate-800">
@@ -100,28 +109,29 @@ export function Header() {
 
       <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur dark:border-slate-800 dark:bg-slate-950/95 md:ml-64">
         <div className="mx-auto flex max-w-6xl items-center gap-3 px-4 py-3 md:px-6">
-          <button type="button" onClick={() => setMobileOpen(true)} aria-label="Open navigation menu" aria-expanded={mobileOpen} aria-controls="mobile-sidebar" className="rounded-lg p-2 text-slate-700 hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-blue-600 md:hidden dark:text-slate-200 dark:hover:bg-slate-800"><MenuIcon/></button>
-          <Link href="/" className="text-base font-bold text-blue-800 dark:text-blue-300 md:hidden">NaijaCare</Link>
-          <div className="ml-auto hidden w-full max-w-sm md:block"><SiteSearch/></div>
-          <div className="ml-auto w-full max-w-[min(70vw,22rem)] md:hidden"><SiteSearch/></div>
-          <button type="button" aria-label={themeLabel} title={themeLabel} onClick={toggleTheme} className="rounded-lg border border-slate-300 p-2.5 hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800"><ThemeIcon theme={theme}/></button>
+          <button type="button" onClick={() => setMobileOpen((open) => !open)} aria-label={mobileOpen ? "Close navigation menu" : "Open navigation menu"} aria-expanded={mobileOpen} aria-controls="mobile-sidebar" className="relative z-[60] rounded-lg p-2 text-slate-700 hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-blue-600 md:hidden dark:text-slate-200 dark:hover:bg-slate-800"><MenuIcon/></button>
+          <Link href="/" className="md:hidden" aria-label="NaijaCare Pharmacy home"><Image src="/images/naijacare-mark.svg" alt="NaijaCare Pharmacy" width={38} height={38} priority className="h-9 w-9" /></Link>
+          <div className="min-w-0 flex-1"><SiteSearch/></div>
+          <button type="button" aria-label={themeLabel} title={themeLabel} onClick={toggleTheme} className="shrink-0 rounded-lg border border-slate-300 p-2.5 hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800"><ThemeIcon theme={theme}/></button>
         </div>
       </header>
 
-      {mobileOpen ? <div className="fixed inset-0 z-50 md:hidden">
-        <button type="button" aria-label="Close navigation menu" onClick={() => setMobileOpen(false)} className="absolute inset-0 bg-slate-950/50" />
-        <aside id="mobile-sidebar" className="relative flex h-full w-[min(18rem,85vw)] flex-col border-r border-slate-200 bg-white px-4 py-5 shadow-2xl dark:border-slate-800 dark:bg-slate-950">
-          <div className="mb-7 flex items-center justify-between">
-            <Link href="/" onClick={() => setMobileOpen(false)} className="flex items-center gap-3 text-lg font-bold text-slate-900 dark:text-white"><span className="grid h-10 w-10 place-items-center rounded-xl bg-blue-600 text-white" aria-hidden="true">N</span>NaijaCare</Link>
-            <button type="button" onClick={() => setMobileOpen(false)} aria-label="Close navigation menu" className="rounded-lg p-2 text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"><span aria-hidden="true" className="text-2xl leading-none">×</span></button>
-          </div>
-          <nav aria-label="Mobile navigation" className="flex-1 space-y-1">{navLinks(true)}</nav>
-          <div className="border-t border-slate-200 pt-4 dark:border-slate-800">
-            <button type="button" aria-label={themeLabel} onClick={toggleTheme} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"><ThemeIcon theme={theme}/><span>{theme === "light" ? "Light Mode" : "Dark Mode"}</span></button>
-            {user ? <button type="button" onClick={logout} className="mt-1 flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"><Icon name="login"/><span>Log out</span></button> : null}
-          </div>
-        </aside>
-      </div> : null}
+      {mobileOpen ? (
+        <div className="fixed inset-0 z-50 md:hidden">
+          <button type="button" aria-label="Close navigation menu" onClick={() => setMobileOpen(false)} className="absolute inset-0 bg-slate-950/50" />
+          <aside id="mobile-sidebar" className="relative flex h-full w-[min(18rem,85vw)] flex-col border-r border-slate-200 bg-white px-4 py-5 shadow-2xl dark:border-slate-800 dark:bg-slate-950">
+            <div className="mb-7 flex items-center justify-between">
+              <Link href="/" onClick={() => setMobileOpen(false)} className="block" aria-label="NaijaCare Pharmacy home"><Image src="/images/naijacare-logo.svg" alt="NaijaCare Pharmacy — Trusted Across Nigeria" width={210} height={74} className="h-auto w-[210px]" /></Link>
+              <button type="button" onClick={() => setMobileOpen(false)} aria-label="Close navigation menu" className="rounded-lg p-2 text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"><span aria-hidden="true" className="text-2xl leading-none">×</span></button>
+            </div>
+            <nav aria-label="Mobile navigation" className="flex-1 space-y-1">{navLinks(true)}</nav>
+            <div className="border-t border-slate-200 pt-4 dark:border-slate-800">
+              <button type="button" aria-label={themeLabel} onClick={toggleTheme} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"><ThemeIcon theme={theme}/><span>{theme === "light" ? "Light Mode" : "Dark Mode"}</span></button>
+              {user ? <button type="button" onClick={logout} className="mt-1 flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"><Icon name="login"/><span>Log out</span></button> : null}
+            </div>
+          </aside>
+        </div>
+      ) : null}
     </>
   );
 }

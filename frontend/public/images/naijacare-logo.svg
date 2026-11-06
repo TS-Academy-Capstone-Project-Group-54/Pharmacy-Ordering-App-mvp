@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="180" viewBox="0 0 640 180" role="img" aria-labelledby="title desc">
+  <title id="title">NaijaCare Pharmacy</title>
+  <desc id="desc">NaijaCare Pharmacy, trusted across Nigeria</desc>
+  <defs>
+    <linearGradient id="green" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#087b5b"/><stop offset="1" stop-color="#075842"/></linearGradient>
+    <linearGradient id="orange" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#f5a623"/><stop offset="1" stop-color="#e87918"/></linearGradient>
+  </defs>
+  <g transform="translate(10 10)">
+    <path d="M48 3h42a13 13 0 0 1 13 13v28h28a13 13 0 0 1 13 13v42a13 13 0 0 1-13 13h-28v28a13 13 0 0 1-13 13H48a13 13 0 0 1-13-13v-28H7a13 13 0 0 1-13-13V57a13 13 0 0 1 13-13h28V16A13 13 0 0 1 48 3Z" transform="translate(8 4)" fill="url(#green)"/>
+    <path d="M90 42c17-17 37-14 46 2 9 16-2 36-36 66L73 88c-20-19-24-34-14-47 10-13 26-12 31 1Z" fill="url(#orange)" stroke="#fff" stroke-width="6" stroke-linejoin="round"/>
+    <path d="M101 42c26-20 41-35 47-31 7 5-2 26-15 39 15-6 28-4 30 3 2 8-10 18-28 22 12 1 20 7 18 13-2 7-14 9-30 6-7 13-15 24-23 32" fill="none" stroke="#a4c947" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M119 22c-2 11-2 20 0 29m29-7c-8 6-14 13-18 20m20-1c-10 3-18 7-25 13" fill="none" stroke="#a4c947" stroke-width="4" stroke-linecap="round"/>
+    <path d="M19 13c6-3 15-3 22 0l-2 15c-6 5-13 5-19 0Z" fill="#fff" opacity=".95"/>
+    <path d="M23 18h14M30 13v15" stroke="#d7e8d7" stroke-width="2"/>
+  </g>
+  <text x="185" y="73" font-family="Arial, Helvetica, sans-serif" font-size="48" font-weight="800" letter-spacing="1" fill="#087052">NAIJA<tspan fill="#e58b1f">CARE</tspan></text>
+  <text x="186" y="119" font-family="Arial, Helvetica, sans-serif" font-size="32" font-weight="700" letter-spacing="5" fill="#087052">PHARMACY</text>
+  <text x="187" y="153" font-family="Arial, Helvetica, sans-serif" font-size="22" fill="#56836e">Trusted Across Nigeria</text>
+</svg>
