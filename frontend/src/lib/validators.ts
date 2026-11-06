@@ -1,258 +1,65 @@
-"use client";
+import { z } from "zod";
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { apiUrl } from "@/lib/api-url";
+export const registerSchema = z.object({
+  fullName: z.string().min(2),
+  email: z.email(),
+  password: z.string().min(6),
+  phoneNumber: z.string().min(7),
+  address: z.string().min(5),
+});
 
-export type AuthUser = {
-  userId: string;
-  fullName: string;
-  email: string;
-  role: "customer" | "admin";
-};
+export const loginSchema = z.object({
+  email: z.email(),
+  password: z.string().min(1),
+});
 
-type AuthSessionInput = AuthUser & {
-  token?: string;
-};
+export const medicineSchema = z.object({
+  name: z.string().min(2),
+  genericName: z.string().min(2),
+  description: z.string().min(10),
+  categoryId: z.uuid().nullable().optional(),
+  price: z.coerce.number().positive(),
+  quantityInStock: z.coerce.number().int().min(0),
+  dosage: z.string().min(2),
+  manufacturer: z.string().min(2),
+  image: z.string().min(1),
+  expiryDate: z.coerce.date(),
+  requiresPrescription: z.coerce.boolean().default(false),
+  isAvailable: z.coerce.boolean().default(true),
+});
 
-type AuthContextType = {
-  user: AuthUser | null;
-  token: string | null;
-  loading: boolean;
-  setAuthSession: (session: AuthSessionInput) => void;
-  refreshMe: () => Promise<AuthUser | null>;
-  logout: () => Promise<void>;
-  authFetch: (input: string, init?: RequestInit) => Promise<Response>;
-};
+export const categorySchema = z.object({
+  name: z.string().min(2),
+  description: z.string().min(3),
+  isActive: z.coerce.boolean().default(true),
+});
 
-const TOKEN_STORAGE_KEY = "group54_token";
-const USER_STORAGE_KEY = "group54_user";
+export const checkoutSchema = z.object({
+  deliveryAddress: z.string().min(5),
+  phoneNumber: z.string().min(7),
+  paymentStatus: z.enum(["Pending", "Paid", "Failed", "Cash on Delivery", "Card"]).default("Pending"),
+  items: z.array(
+    z.object({
+      medicineId: z.string().uuid(),
+      quantity: z.number().int().min(1),
+    }),
+  ),
+});
 
-function getTokenFromCookie(): string | null {
-  if (typeof document === "undefined") return null;
-  const found = document.cookie
-    .split(";")
-    .map((v) => v.trim())
-    .find((v) => v.startsWith("group54_session="));
-  return found ? decodeURIComponent(found.split("=")[1] ?? "") : null;
-}
+export const orderStatusSchema = z.object({
+  orderStatus: z.enum([
+    "Pending",
+    "Confirmed",
+    "Processing",
+    "Ready for Delivery",
+    "Out for Delivery",
+    "Delivered",
+    "Cancelled",
+  ]),
+});
 
-const AuthContext = createContext<AuthContextType | null>(null);
-
-export function getStoredToken(): string | null {
-  if (typeof window === "undefined") return null;
-  try {
-    return localStorage.getItem(TOKEN_STORAGE_KEY);
-  } catch {
-    return null;
-  }
-}
-
-export function getStoredUser(): AuthUser | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = localStorage.getItem(USER_STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as AuthUser) : null;
-  } catch {
-    return null;
-  }
-}
-
-export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<AuthUser | null>(null);
-  const [token, setToken] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  const setAuthSession = useCallback((session: AuthSessionInput) => {
-    const cleanUser: AuthUser = {
-      userId: session.userId,
-      fullName: session.fullName,
-      email: session.email,
-      role: session.role,
-    };
-
-    setUser(cleanUser);
-
-    if (session.token) {
-      setToken(session.token);
-      try {
-        document.cookie = `group54_session=${session.token}; path=/; max-age=${60 * 60 * 24 * 7}; SameSite=Lax`;
-      } catch {
-        // Ignore cookie set errors
-      }
-    }
-
-    try {
-      localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(cleanUser));
-      if (session.token) {
-        localStorage.setItem(TOKEN_STORAGE_KEY, session.token);
-      }
-    } catch {
-      // Ignore storage errors
-    }
-  }, []);
-
-  const authFetch = useCallback(
-    async (input: string, init: RequestInit = {}) => {
-      const buildHeaders = (tokenValue?: string | null) => {
-        const headers = new Headers(init.headers ?? {});
-        if (tokenValue) {
-          if (!headers.has("Authorization")) {
-            headers.set("Authorization", `Bearer ${tokenValue}`);
-          }
-          if (!headers.has("x-auth-token")) {
-            headers.set("x-auth-token", tokenValue);
-          }
-        }
-        return headers;
-      };
-
-      const resolvedInput = typeof input === "string" ? apiUrl(input) : input;
-      const initialToken = token ?? getStoredToken() ?? getTokenFromCookie();
-      let res = await fetch(resolvedInput, {
-        ...init,
-        headers: buildHeaders(initialToken),
-        credentials: "include",
-        cache: init.cache ?? "no-store",
-      });
-
-      if (res.status !== 401) return res;
-
-      try {
-        const meRes = await fetch(apiUrl("/api/auth/me"), {
-          credentials: "include",
-          cache: "no-store",
-          headers: buildHeaders(initialToken),
-        });
-        const mePayload = await meRes.json();
-        if (mePayload?.success && mePayload?.data?.token) {
-          const freshToken = String(mePayload.data.token);
-          setToken(freshToken);
-          try {
-            localStorage.setItem(TOKEN_STORAGE_KEY, freshToken);
-            document.cookie = `group54_session=${freshToken}; path=/; max-age=${60 * 60 * 24 * 7}; SameSite=Lax`;
-          } catch {
-            // ignore
-          }
-
-          res = await fetch(resolvedInput, {
-            ...init,
-            headers: buildHeaders(freshToken),
-            credentials: "include",
-            cache: init.cache ?? "no-store",
-          });
-        }
-      } catch {
-        // ignore and return original 401
-      }
-
-      return res;
-    },
-    [token, user],
-  );
-
-  const refreshMe = useCallback(async (): Promise<AuthUser | null> => {
-    try {
-      setLoading(true);
-      const storedToken = getStoredToken() ?? getTokenFromCookie();
-      const storedUser = getStoredUser();
-
-      if (storedToken) setToken(storedToken);
-      if (storedUser) setUser(storedUser);
-
-      const headers: Record<string, string> = {};
-      if (storedToken) {
-        headers.Authorization = `Bearer ${storedToken}`;
-        headers["x-auth-token"] = storedToken;
-      }
-
-      const res = await fetch(apiUrl("/api/auth/me"), {
-        cache: "no-store",
-        credentials: "include",
-        headers,
-      });
-      const payload = await res.json();
-      if (payload.success && payload.data) {
-        const verifiedUser: AuthUser = {
-          userId: payload.data.userId,
-          fullName: payload.data.fullName,
-          email: payload.data.email,
-          role: payload.data.role,
-        };
-        setUser(verifiedUser);
-
-        const refreshedToken = payload.data.token as string | undefined;
-        if (refreshedToken) {
-          setToken(refreshedToken);
-        }
-
-        try {
-          localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(verifiedUser));
-          if (refreshedToken) {
-            localStorage.setItem(TOKEN_STORAGE_KEY, refreshedToken);
-            document.cookie = `group54_session=${refreshedToken}; path=/; max-age=${60 * 60 * 24 * 7}; SameSite=Lax`;
-          }
-        } catch {
-          // Ignore
-        }
-        return verifiedUser;
-      }
-
-      if (storedToken && storedUser) {
-        setToken(storedToken);
-        setUser(storedUser);
-        return storedUser;
-      }
-
-      setUser(null);
-      setToken(null);
-      try {
-        localStorage.removeItem(USER_STORAGE_KEY);
-        localStorage.removeItem(TOKEN_STORAGE_KEY);
-      } catch {
-        // Ignore
-      }
-      return null;
-    } catch {
-      const fallback = getStoredUser();
-      setUser(fallback);
-      return fallback;
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  const logout = useCallback(async () => {
-    try {
-      await fetch(apiUrl("/api/auth/logout"), { method: "POST" });
-    } catch {
-      // Ignore
-    }
-    try {
-      localStorage.removeItem(USER_STORAGE_KEY);
-      localStorage.removeItem(TOKEN_STORAGE_KEY);
-      document.cookie = "group54_session=; path=/; max-age=0";
-    } catch {
-      // Ignore
-    }
-    setUser(null);
-    setToken(null);
-    window.location.href = "/";
-  }, []);
-
-  useEffect(() => {
-    void refreshMe();
-  }, [refreshMe]);
-
-  const value = useMemo(
-    () => ({ user, token, loading, setAuthSession, refreshMe, logout, authFetch }),
-    [user, token, loading, setAuthSession, refreshMe, logout, authFetch],
-  );
-
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
-}
-
-export function useAuth() {
-  const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error("useAuth must be used within AuthProvider");
-  return ctx;
-}
+export const profileSchema = z.object({
+  fullName: z.string().min(2),
+  phoneNumber: z.string().min(7),
+  address: z.string().min(5),
+});

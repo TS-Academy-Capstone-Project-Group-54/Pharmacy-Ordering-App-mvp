@@ -1,128 +1,373 @@
-import { db } from "@/db";
-import { medicines, orderItems, orders, users } from "@/db/schema";
-import { fail, ok } from "@/lib/api";
-import { requireAdmin, requireAuth } from "@/lib/route-auth";
-import { checkoutSchema } from "@/lib/validators";
-import { and, count, desc, eq, ilike, inArray } from "drizzle-orm";
+const express = require('express');
+const { pool } = require('../db');
+const { ok, fail } = require('../utils/response');
+const { requireAuth, requireAdmin } = require('../middleware/auth');
 
-export async function GET(req: Request) {
-  const auth = await requireAdmin(req);
-  if (auth.error) return auth.error;
+const router = express.Router();
 
-  const { searchParams } = new URL(req.url);
-  const status = searchParams.get("status");
-  const search = searchParams.get("search")?.trim();
+function normalizeString(value) {
+  if (typeof value === 'string') return value.trim();
+  if (value === null || value === undefined) return '';
+  return String(value).trim();
+}
 
-  const filters = [] as any[];
-  if (status) filters.push(eq(orders.orderStatus, status as any));
-  const where = filters.length > 0 ? and(...filters) : undefined;
+function isValidUUID(value) {
+  if (typeof value !== 'string') return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
 
-  const rows = await db
-    .select({
-      id: orders.id,
-      orderStatus: orders.orderStatus,
-      paymentStatus: orders.paymentStatus,
-      totalAmount: orders.totalAmount,
-      createdAt: orders.createdAt,
-      customerName: users.fullName,
-      customerEmail: users.email,
-    })
-    .from(orders)
-    .leftJoin(users, eq(orders.customerId, users.id))
-    .where(where)
-    .orderBy(desc(orders.createdAt));
+function validateMedicinePayload(payload, { allowPartial = false } = {}) {
+  const errors = [];
+  const data = payload || {};
 
-  const filtered = search
-    ? rows.filter((r) => r.customerName?.toLowerCase().includes(search.toLowerCase()) || r.id.includes(search))
-    : rows;
+  const requiredFields = [
+    ['name', 'Medicine name'],
+    ['genericName', 'Generic name'],
+    ['description', 'Description'],
+    ['dosage', 'Dosage'],
+    ['manufacturer', 'Manufacturer'],
+    ['image', 'Image URL'],
+    ['expiryDate', 'Expiry date'],
+  ];
 
-  const statsRows = await db.select({ totalOrders: count(orders.id) }).from(orders);
+  for (const [field, label] of requiredFields) {
+    const value = normalizeString(data[field]);
+    if (!allowPartial && !value) {
+      errors.push(`${label} is required.`);
+    }
+    if (allowPartial && value === '' && field !== 'expiryDate') {
+      continue;
+    }
+  }
 
-  return ok("Orders loaded", {
-    items: filtered,
-    stats: {
-      totalOrders: statsRows[0]?.totalOrders ?? 0,
-      pending: await db.select({ c: count() }).from(orders).where(eq(orders.orderStatus, "Pending")).then((d) => d[0]?.c ?? 0),
-      processing: await db.select({ c: count() }).from(orders).where(eq(orders.orderStatus, "Processing")).then((d) => d[0]?.c ?? 0),
-      completed: await db.select({ c: count() }).from(orders).where(eq(orders.orderStatus, "Delivered")).then((d) => d[0]?.c ?? 0),
+  const name = normalizeString(data.name);
+  const genericName = normalizeString(data.genericName);
+  const description = normalizeString(data.description);
+  const dosage = normalizeString(data.dosage);
+  const manufacturer = normalizeString(data.manufacturer);
+  const image = normalizeString(data.image);
+
+  if (name && name.length < 2) errors.push('Medicine name must be at least 2 characters long.');
+  if (genericName && genericName.length < 2) errors.push('Generic name must be at least 2 characters long.');
+  if (description && description.length < 10) errors.push('Description must be at least 10 characters long.');
+  if (dosage && dosage.length < 2) errors.push('Dosage is invalid.');
+  if (manufacturer && manufacturer.length < 2) errors.push('Manufacturer is invalid.');
+  if (image && !/^https?:\/\//i.test(image)) errors.push('Image URL must start with http:// or https://.');
+
+  if (data.price !== undefined && data.price !== null && data.price !== '') {
+    const price = Number(data.price);
+    if (!Number.isFinite(price) || price <= 0) {
+      errors.push('Price must be a valid number greater than 0.');
+    }
+  } else if (!allowPartial) {
+    errors.push('Price is required.');
+  }
+
+  if (data.quantityInStock !== undefined && data.quantityInStock !== null && data.quantityInStock !== '') {
+    const quantity = Number(data.quantityInStock);
+    if (!Number.isInteger(quantity) || quantity < 0) {
+      errors.push('Quantity in stock must be a whole number greater than or equal to 0.');
+    }
+  } else if (!allowPartial) {
+    errors.push('Quantity in stock is required.');
+  }
+
+  if (data.categoryId !== undefined && data.categoryId !== null && data.categoryId !== '') {
+    const categoryId = normalizeString(data.categoryId);
+    if (!isValidUUID(categoryId)) {
+      errors.push('Category ID must be a valid UUID.');
+    }
+  }
+
+  if (data.expiryDate !== undefined && data.expiryDate !== null && data.expiryDate !== '') {
+    const expiry = new Date(data.expiryDate);
+    if (Number.isNaN(expiry.getTime())) {
+      errors.push('Expiry date must be a valid ISO date.');
+    } else {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      if (expiry < today) {
+        errors.push('Expiry date must be a future date.');
+      }
+    }
+  } else if (!allowPartial) {
+    errors.push('Expiry date is required.');
+  }
+
+  return { valid: errors.length === 0, errors };
+}
+
+router.get('/', async (req, res) => {
+  const search = (req.query.search || '').toString().trim();
+  const category = (req.query.category || '').toString().trim();
+  const availability = (req.query.availability || '').toString().trim();
+  const minPrice = req.query.minPrice;
+  const maxPrice = req.query.maxPrice;
+  const page = Math.max(Number(req.query.page || 1), 1);
+  const limit = Math.min(Math.max(Number(req.query.limit || 10), 1), 100);
+  const offset = (page - 1) * limit;
+
+  const clauses = ['m.is_available = true'];
+  const vals = [];
+  let i = 1;
+
+  if (search) {
+    clauses.push(`(m.name ilike $${i} or m.generic_name ilike $${i + 1})`);
+    vals.push(`%${search}%`, `%${search}%`);
+    i += 2;
+  }
+
+  if (category) {
+    clauses.push(`m.category_id = $${i}`);
+    vals.push(category);
+    i += 1;
+  }
+
+  if (availability === 'in-stock') {
+    clauses.push('m.quantity_in_stock > 0');
+  }
+
+  if (availability === 'out-of-stock') {
+    clauses.push('m.quantity_in_stock = 0');
+  }
+
+  if (minPrice !== undefined && minPrice !== null && minPrice !== '') {
+    clauses.push(`m.price >= $${i}`);
+    vals.push(Number(minPrice));
+    i += 1;
+  }
+
+  if (maxPrice !== undefined && maxPrice !== null && maxPrice !== '') {
+    clauses.push(`m.price <= $${i}`);
+    vals.push(Number(maxPrice));
+    i += 1;
+  }
+
+  const where = `where ${clauses.join(' and ')}`;
+
+  const rows = await pool.query(
+    `select
+      m.id,
+      m.name,
+      m.generic_name as "genericName",
+      m.description,
+      m.category_id as "categoryId",
+      c.name as "categoryName",
+      m.price,
+      m.quantity_in_stock as "quantityInStock",
+      m.dosage,
+      m.manufacturer,
+      m.image,
+      m.expiry_date as "expiryDate",
+      m.requires_prescription as "requiresPrescription",
+      m.is_available as "isAvailable",
+      m.created_at as "createdAt",
+      m.updated_at as "updatedAt"
+     from medicines m
+     left join categories c on c.id = m.category_id
+     ${where}
+     order by m.name asc
+     limit $${i} offset $${i + 1}`,
+    [...vals, limit, offset],
+  );
+
+  const total = await pool.query(`select count(*)::int as count from medicines m ${where}`, vals);
+
+  return ok(res, 'Medicines loaded', {
+    items: rows.rows,
+    pagination: {
+      total: total.rows[0]?.count || 0,
+      page,
+      limit,
+      totalPages: Math.ceil((total.rows[0]?.count || 0) / limit),
     },
   });
-}
+});
 
-export async function POST(req: Request) {
-  const auth = await requireAuth(req);
-  if (auth.error) return auth.error;
-
+router.post('/', requireAuth, requireAdmin, async (req, res) => {
   try {
-    const body = await req.json();
-    const parsed = checkoutSchema.safeParse(body);
-    if (!parsed.success) return fail("Order could not be placed.", 400);
+    const b = req.body || {};
+    const validation = validateMedicinePayload(b);
+    if (!validation.valid) {
+      return fail(res, validation.errors.join(' '), 400);
+    }
 
-    const medicineIds = parsed.data.items.map((i) => i.medicineId);
-    const [createdOrder] = await db.transaction(async (tx) => {
-      const medRows = await tx.select().from(medicines).where(inArray(medicines.id, medicineIds)).for("update");
-      if (medRows.length !== medicineIds.length) {
-        throw new Error("Missing medicine");
-      }
+    const q = await pool.query(
+      `insert into medicines
+      (name, generic_name, description, category_id, price, quantity_in_stock, dosage, manufacturer, image, expiry_date, requires_prescription, is_available)
+      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      returning
+        id,
+        name,
+        generic_name as "genericName",
+        description,
+        category_id as "categoryId",
+        price,
+        quantity_in_stock as "quantityInStock",
+        dosage,
+        manufacturer,
+        image,
+        expiry_date as "expiryDate",
+        requires_prescription as "requiresPrescription",
+        is_available as "isAvailable",
+        created_at as "createdAt",
+        updated_at as "updatedAt"`,
+      [
+        normalizeString(b.name),
+        normalizeString(b.genericName),
+        normalizeString(b.description),
+        b.categoryId || null,
+        Number(b.price),
+        Number(b.quantityInStock),
+        normalizeString(b.dosage),
+        normalizeString(b.manufacturer),
+        normalizeString(b.image),
+        new Date(b.expiryDate),
+        !!b.requiresPrescription,
+        b.isAvailable !== false,
+      ],
+    );
 
-      let total = 0;
-      const prepared = parsed.data.items.map((item) => {
-        const med = medRows.find((m) => m.id === item.medicineId)!;
-        const unitPrice = Number(med.price);
-        if (!med.isAvailable || med.quantityInStock < item.quantity) {
-          throw new Error(`Insufficient stock for ${med.name}`);
-        }
-        const subtotal = unitPrice * item.quantity;
-        total += subtotal;
-        return {
-          medicineId: med.id,
-          medicineName: med.name,
-          quantity: item.quantity,
-          unitPrice,
-          subtotal,
-          updatedStock: med.quantityInStock - item.quantity,
-        };
-      });
-
-      const [created] = await tx
-        .insert(orders)
-        .values({
-          customerId: auth.session.userId,
-          totalAmount: String(total),
-          deliveryAddress: parsed.data.deliveryAddress,
-          phoneNumber: parsed.data.phoneNumber,
-          paymentStatus: parsed.data.paymentStatus,
-          orderStatus: "Pending",
-        })
-        .returning();
-
-      for (const p of prepared) {
-        await tx.insert(orderItems).values({
-          orderId: created.id,
-          medicineId: p.medicineId,
-          medicineName: p.medicineName,
-          quantity: p.quantity,
-          unitPrice: String(p.unitPrice),
-          subtotal: String(p.subtotal),
-        });
-
-        await tx
-          .update(medicines)
-          .set({ quantityInStock: p.updatedStock, updatedAt: new Date() })
-          .where(eq(medicines.id, p.medicineId));
-      }
-
-      return [created];
-    });
-
-    return ok("Order placed successfully", createdOrder);
+    return ok(res, 'Medicine created successfully', q.rows[0]);
   } catch (error) {
-    if (error instanceof Error && error.message.includes("Insufficient stock")) {
-      return fail("Insufficient stock.", 400);
-    }
-    if (error instanceof Error && error.message.includes("Missing medicine")) {
-      return fail("One or more selected medicines are unavailable.", 400);
-    }
-    return fail("Order could not be placed.", 500);
+    console.error('Create medicine error:', error);
+    return fail(res, 'Unable to create medicine', 500);
   }
-}
+});
+
+router.get('/:id', async (req, res) => {
+  const medicineId = normalizeString(req.params.id);
+  if (!isValidUUID(medicineId)) {
+    return fail(res, 'Medicine ID must be a valid UUID.', 400);
+  }
+
+  const q = await pool.query(
+    `select
+      m.id,
+      m.name,
+      m.generic_name as "genericName",
+      m.description,
+      m.category_id as "categoryId",
+      c.name as "categoryName",
+      m.price,
+      m.quantity_in_stock as "quantityInStock",
+      m.dosage,
+      m.manufacturer,
+      m.image,
+      m.expiry_date as "expiryDate",
+      m.requires_prescription as "requiresPrescription",
+      m.is_available as "isAvailable",
+      m.created_at as "createdAt",
+      m.updated_at as "updatedAt"
+     from medicines m
+     left join categories c on c.id = m.category_id
+     where m.id=$1
+     limit 1`,
+    [medicineId],
+  );
+
+  if (q.rowCount === 0) {
+    return fail(res, 'Medicine not found', 404);
+  }
+
+  return ok(res, 'Medicine loaded', q.rows[0]);
+});
+
+router.put('/:id', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const medicineId = normalizeString(req.params.id);
+    if (!isValidUUID(medicineId)) {
+      return fail(res, 'Medicine ID must be a valid UUID.', 400);
+    }
+
+    const b = req.body || {};
+    const validation = validateMedicinePayload(b, { allowPartial: true });
+    if (!validation.valid) {
+      return fail(res, validation.errors.join(' '), 400);
+    }
+
+    const updates = [];
+    const vals = [];
+    let index = 1;
+
+    const pushField = (column, value, transform = value) => {
+      if (Object.prototype.hasOwnProperty.call(b, column)) {
+        updates.push(`${column}=$${index}`);
+        vals.push(transform);
+        index += 1;
+      }
+    };
+
+    pushField('name', normalizeString(b.name));
+    pushField('generic_name', normalizeString(b.genericName));
+    pushField('description', normalizeString(b.description));
+    pushField('category_id', b.categoryId === null ? null : (b.categoryId || null), (b.categoryId === null ? null : (b.categoryId || null)));
+    pushField('price', Number(b.price));
+    pushField('quantity_in_stock', Number(b.quantityInStock));
+    pushField('dosage', normalizeString(b.dosage));
+    pushField('manufacturer', normalizeString(b.manufacturer));
+    pushField('image', normalizeString(b.image));
+    pushField('expiry_date', b.expiryDate ? new Date(b.expiryDate) : undefined);
+    pushField('requires_prescription', b.requiresPrescription !== undefined ? !!b.requiresPrescription : undefined);
+    pushField('is_available', b.isAvailable !== undefined ? !!b.isAvailable : undefined);
+
+    if (updates.length === 0) {
+      return fail(res, 'No fields were provided to update.', 400);
+    }
+
+    updates.push(`updated_at=now()`);
+    vals.push(medicineId);
+
+    const q = await pool.query(
+      `update medicines
+       set ${updates.join(', ')}
+       where id=$${index}
+       returning
+         id,
+         name,
+         generic_name as "genericName",
+         description,
+         category_id as "categoryId",
+         price,
+         quantity_in_stock as "quantityInStock",
+         dosage,
+         manufacturer,
+         image,
+         expiry_date as "expiryDate",
+         requires_prescription as "requiresPrescription",
+         is_available as "isAvailable",
+         created_at as "createdAt",
+         updated_at as "updatedAt"`,
+      [...vals, medicineId],
+    );
+
+    if (q.rowCount === 0) {
+      return fail(res, 'Medicine not found', 404);
+    }
+
+    return ok(res, 'Medicine updated successfully', q.rows[0]);
+  } catch (error) {
+    console.error('Update medicine error:', error);
+    return fail(res, 'Unable to update medicine', 500);
+  }
+});
+
+router.delete('/:id', requireAuth, requireAdmin, async (req, res) => {
+  const medicineId = normalizeString(req.params.id);
+  if (!isValidUUID(medicineId)) {
+    return fail(res, 'Medicine ID must be a valid UUID.', 400);
+  }
+
+  const q = await pool.query(
+    'update medicines set is_available=false, quantity_in_stock=0, updated_at=now() where id=$1 returning *',
+    [medicineId],
+  );
+
+  if (q.rowCount === 0) {
+    return fail(res, 'Medicine not found', 404);
+  }
+
+  return ok(res, 'Medicine deactivated', q.rows[0]);
+});
+
+module.exports = router;
