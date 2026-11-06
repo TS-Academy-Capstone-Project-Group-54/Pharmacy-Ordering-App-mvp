@@ -5,6 +5,8 @@ const { requireAuth, requireAdmin } = require('../middleware/auth');
 
 const router = express.Router();
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 const normalizeOrderItems = (items = []) => {
   if (!Array.isArray(items) || items.length === 0) {
     throw new Error('empty-items');
@@ -18,10 +20,10 @@ const normalizeOrderItems = (items = []) => {
       throw new Error('invalid-item');
     }
 
-    const medicineId = Number(item.medicineId ?? item.medicine_id);
+    const medicineId = typeof item.medicineId === 'string' ? item.medicineId : typeof item.medicine_id === 'string' ? item.medicine_id : '';
     const quantity = Number(item.quantity);
 
-    if (!Number.isFinite(medicineId) || medicineId <= 0) {
+    if (!medicineId || !UUID_RE.test(medicineId)) {
       throw new Error('invalid-item');
     }
 
@@ -46,7 +48,7 @@ router.post('/', requireAuth, async (req, res) => {
   const paymentStatus = String(req.body?.paymentStatus ?? 'Pending').trim();
   const items = req.body?.items ?? [];
 
-  const allowedPaymentStatuses = ['Pending', 'Paid', 'Cash on Delivery', 'Card'];
+  const allowedPaymentStatuses = ['Pending', 'Paid', 'Failed', 'Cash on Delivery', 'Card'];
 
   if (!deliveryAddress || deliveryAddress.length < 5) {
     return fail(res, 'Please add a valid delivery address before placing the order.', 400);
@@ -88,10 +90,13 @@ router.post('/', requireAuth, async (req, res) => {
     const prepared = [];
 
     for (const item of normalizedItems) {
-      const medQ = await client.query('select * from medicines where id=$1 limit 1', [item.medicineId]);
+      const medQ = await client.query('select * from medicines where id=$1 limit 1 for update', [item.medicineId]);
       if (medQ.rowCount === 0) throw new Error('not-found');
+
       const med = medQ.rows[0];
-      if (!med.is_available || med.quantity_in_stock < item.quantity) throw new Error('insufficient-stock');
+      if (!med.is_available || Number(med.quantity_in_stock) < item.quantity) {
+        throw new Error('insufficient-stock');
+      }
 
       const unitPrice = Number(med.price);
       const subtotal = unitPrice * item.quantity;
@@ -112,7 +117,8 @@ router.post('/', requireAuth, async (req, res) => {
          values ($1,$2,$3,$4,$5,$6)`,
         [order.id, p.med.id, p.med.name, p.qty, String(p.unitPrice), String(p.subtotal)],
       );
-      await client.query('update medicines set quantity_in_stock=$1, updated_at=now() where id=$2', [p.med.quantity_in_stock - p.qty, p.med.id]);
+
+      await client.query('update medicines set quantity_in_stock=$1, updated_at=now() where id=$2', [Number(p.med.quantity_in_stock) - p.qty, p.med.id]);
     }
 
     await client.query('COMMIT');
@@ -139,10 +145,10 @@ router.get('/my-orders', requireAuth, async (req, res) => {
        payment_status as "paymentStatus",
        created_at as "createdAt",
        updated_at as "updatedAt"
-     from orders
-     where customer_id=$1
-     order by created_at desc`,
-    [req.user.userId]
+      from orders
+      where customer_id=$1
+      order by created_at desc`,
+    [req.user.userId],
   );
 
   return ok(res, 'My orders loaded', q.rows);
@@ -151,19 +157,19 @@ router.get('/my-orders', requireAuth, async (req, res) => {
 router.get('/:id', requireAuth, async (req, res) => {
   const orderQ = await pool.query(
     `select
-      id,
-      customer_id as "customerId",
-      total_amount as "totalAmount",
-      delivery_address as "deliveryAddress",
-      phone_number as "phoneNumber",
-      order_status as "orderStatus",
-      payment_status as "paymentStatus",
-      created_at as "createdAt",
-      updated_at as "updatedAt"
-    from orders
-    where id=$1
-    limit 1`,
-    [req.params.id]
+       id,
+       customer_id as "customerId",
+       total_amount as "totalAmount",
+       delivery_address as "deliveryAddress",
+       phone_number as "phoneNumber",
+       order_status as "orderStatus",
+       payment_status as "paymentStatus",
+       created_at as "createdAt",
+       updated_at as "updatedAt"
+     from orders
+     where id=$1
+     limit 1`,
+    [req.params.id],
   );
   if (orderQ.rowCount === 0) return fail(res, 'Order not found', 404);
   const order = orderQ.rows[0];
@@ -174,18 +180,19 @@ router.get('/:id', requireAuth, async (req, res) => {
 
   const items = await pool.query(
     `select
-      id,
-      order_id as "orderId",
-      medicine_id as "medicineId",
-      medicine_name as "medicineName",
-      quantity,
-      unit_price as "unitPrice",
-      subtotal,
-      created_at as "createdAt"
-    from order_items
-    where order_id=$1`,
-    [order.id]
+       id,
+       order_id as "orderId",
+       medicine_id as "medicineId",
+       medicine_name as "medicineName",
+       quantity,
+       unit_price as "unitPrice",
+       subtotal,
+       created_at as "createdAt"
+     from order_items
+     where order_id=$1`,
+    [order.id],
   );
+
   return ok(res, 'Order details loaded', { ...order, items: items.rows });
 });
 
@@ -197,7 +204,7 @@ router.get('/', requireAuth, requireAdmin, async (req, res) => {
   let where = '';
   if (status) {
     params.push(status);
-    where = `where o.order_status=$1`;
+    where = 'where o.order_status=$1';
   }
 
   const q = await pool.query(
@@ -211,13 +218,14 @@ router.get('/', requireAuth, requireAdmin, async (req, res) => {
     ? q.rows.filter((r) => (r.customer_name || '').toLowerCase().includes(search) || String(r.id).includes(search))
     : q.rows;
 
+  const totalOrders = await pool.query('select count(*)::int as count from orders');
   return ok(res, 'Orders loaded', {
     items: rows,
     stats: {
-      totalOrders: rows.length,
-      pending: rows.filter((r) => r.order_status === 'Pending').length,
-      processing: rows.filter((r) => r.order_status === 'Processing').length,
-      completed: rows.filter((r) => r.order_status === 'Delivered').length,
+      totalOrders: totalOrders.rows[0]?.count || 0,
+      pending: await pool.query('select count(*)::int as count from orders where order_status=$1', ['Pending']).then((result) => Number(result.rows[0]?.count || 0)),
+      processing: await pool.query('select count(*)::int as count from orders where order_status=$1', ['Processing']).then((result) => Number(result.rows[0]?.count || 0)),
+      completed: await pool.query('select count(*)::int as count from orders where order_status=$1', ['Delivered']).then((result) => Number(result.rows[0]?.count || 0)),
     },
   });
 });
@@ -245,4 +253,3 @@ router.patch('/:id/status', requireAuth, requireAdmin, async (req, res) => {
 });
 
 module.exports = router;
-

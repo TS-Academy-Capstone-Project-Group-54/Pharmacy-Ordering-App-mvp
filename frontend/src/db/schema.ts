@@ -1,65 +1,83 @@
-import { z } from "zod";
+import { pgTable, text, timestamp, uuid, numeric, integer, boolean, pgEnum, index } from "drizzle-orm/pg-core";
 
-export const registerSchema = z.object({
-  fullName: z.string().min(2),
-  email: z.email(),
-  password: z.string().min(6),
-  phoneNumber: z.string().min(7),
-  address: z.string().min(5),
+export const userRoleEnum = pgEnum("user_role", ["customer", "admin"]);
+export const orderStatusEnum = pgEnum("order_status", [
+  "Pending",
+  "Confirmed",
+  "Processing",
+  "Ready for Delivery",
+  "Out for Delivery",
+  "Delivered",
+  "Cancelled",
+]);
+export const paymentStatusEnum = pgEnum("payment_status", ["Pending", "Paid", "Failed", "Cash on Delivery", "Card"]);
+
+export const users = pgTable("users", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  fullName: text("full_name").notNull(),
+  email: text("email").notNull().unique(),
+  passwordHash: text("password_hash").notNull(),
+  phoneNumber: text("phone_number").notNull(),
+  address: text("address").notNull(),
+  role: userRoleEnum("role").notNull().default("customer"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
-export const loginSchema = z.object({
-  email: z.email(),
-  password: z.string().min(1),
+export const categories = pgTable("categories", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: text("name").notNull().unique(),
+  description: text("description").notNull(),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
-export const medicineSchema = z.object({
-  name: z.string().min(2),
-  genericName: z.string().min(2),
-  description: z.string().min(10),
-  categoryId: z.uuid().nullable().optional(),
-  price: z.coerce.number().positive(),
-  quantityInStock: z.coerce.number().int().min(0),
-  dosage: z.string().min(2),
-  manufacturer: z.string().min(2),
-  image: z.string().min(1),
-  expiryDate: z.coerce.date(),
-  requiresPrescription: z.coerce.boolean().default(false),
-  isAvailable: z.coerce.boolean().default(true),
+export const medicines = pgTable(
+  "medicines",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    name: text("name").notNull(),
+    genericName: text("generic_name").notNull(),
+    description: text("description").notNull(),
+    categoryId: uuid("category_id").references(() => categories.id, { onDelete: "set null" }),
+    price: numeric("price", { precision: 12, scale: 2 }).notNull(),
+    quantityInStock: integer("quantity_in_stock").notNull().default(0),
+    dosage: text("dosage").notNull(),
+    manufacturer: text("manufacturer").notNull(),
+    image: text("image").notNull(),
+    expiryDate: timestamp("expiry_date", { withTimezone: true }).notNull(),
+    requiresPrescription: boolean("requires_prescription").notNull().default(false),
+    isAvailable: boolean("is_available").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    medicineNameIdx: index("medicines_name_idx").on(t.name),
+    medicineGenericNameIdx: index("medicines_generic_name_idx").on(t.genericName),
+  }),
+);
+
+export const orders = pgTable("orders", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  customerId: uuid("customer_id").notNull().references(() => users.id, { onDelete: "restrict" }),
+  totalAmount: numeric("total_amount", { precision: 12, scale: 2 }).notNull(),
+  deliveryAddress: text("delivery_address").notNull(),
+  phoneNumber: text("phone_number").notNull(),
+  orderStatus: orderStatusEnum("order_status").notNull().default("Pending"),
+  paymentStatus: paymentStatusEnum("payment_status").notNull().default("Pending"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
-export const categorySchema = z.object({
-  name: z.string().min(2),
-  description: z.string().min(3),
-  isActive: z.coerce.boolean().default(true),
-});
-
-export const checkoutSchema = z.object({
-  deliveryAddress: z.string().min(5),
-  phoneNumber: z.string().min(7),
-  paymentStatus: z.enum(["Pending", "Paid", "Failed", "Cash on Delivery", "Card"]).default("Pending"),
-  items: z.array(
-    z.object({
-      medicineId: z.string().uuid(),
-      quantity: z.number().int().min(1),
-    }),
-  ),
-});
-
-export const orderStatusSchema = z.object({
-  orderStatus: z.enum([
-    "Pending",
-    "Confirmed",
-    "Processing",
-    "Ready for Delivery",
-    "Out for Delivery",
-    "Delivered",
-    "Cancelled",
-  ]),
-});
-
-export const profileSchema = z.object({
-  fullName: z.string().min(2),
-  phoneNumber: z.string().min(7),
-  address: z.string().min(5),
+export const orderItems = pgTable("order_items", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  orderId: uuid("order_id").notNull().references(() => orders.id, { onDelete: "cascade" }),
+  medicineId: uuid("medicine_id").notNull().references(() => medicines.id, { onDelete: "restrict" }),
+  medicineName: text("medicine_name").notNull(),
+  quantity: integer("quantity").notNull(),
+  unitPrice: numeric("unit_price", { precision: 12, scale: 2 }).notNull(),
+  subtotal: numeric("subtotal", { precision: 12, scale: 2 }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
