@@ -1,123 +1,190 @@
-import { db } from "@/db";
-import { medicines, orderItems, orders, users } from "@/db/schema";
-import { fail, ok } from "@/lib/api";
-import { requireAdmin, requireAuth } from "@/lib/route-auth";
-import { checkoutSchema } from "@/lib/validators";
-import { and, count, desc, eq, ilike, inArray } from "drizzle-orm";
+import { FormEvent, useCallback, useEffect, useState } from "react";
+import { useAuth } from "@/context/auth-context";
+import { Button } from "@/components/ui/button";
+import { ConfirmationModal } from "@/components/ui/confirmation-modal";
+import { formatNaira } from "@/lib/utils";
 
-export async function GET(req: Request) {
-  const auth = await requireAdmin(req);
-  if (auth.error) return auth.error;
+export default function AdminMedicinesPage() {
+  const { authFetch } = useAuth();
+  const [medicines, setMedicines] = useState<any[]>([]);
+  const [categories, setCategories] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [removeId, setRemoveId] = useState<string | null>(null);
+  const [drafts, setDrafts] = useState<Record<string, { price: string; quantityInStock: string }>>({});
+  const [feedback, setFeedback] = useState("");
 
-  const { searchParams } = new URL(req.url);
-  const status = searchParams.get("status");
-  const search = searchParams.get("search")?.trim();
+  const load = useCallback(async () => {
+    setLoading(true);
+    const [medRes, catRes] = await Promise.all([
+      authFetch("/api/medicines?limit=100&includeInactive=true"),
+      authFetch("/api/categories"),
+    ]);
+    const medPayload = await medRes.json();
+    const catPayload = await catRes.json();
+    const meds = medPayload.data?.items || [];
+    setMedicines(meds);
+    setCategories(catPayload.data || []);
+    setDrafts(
+      Object.fromEntries(
+        meds.map((m: any) => [m.id, { price: String(Number(m.price)), quantityInStock: String(m.quantityInStock) }]),
+      ),
+    );
+    setLoading(false);
+  }, [authFetch]);
 
-  const filters = [] as any[];
-  if (status) filters.push(eq(orders.orderStatus, status as any));
-  const where = filters.length > 0 ? and(...filters) : undefined;
+  useEffect(() => {
+    void load();
+  }, [load]);
 
-  const rows = await db
-    .select({
-      id: orders.id,
-      orderStatus: orders.orderStatus,
-      paymentStatus: orders.paymentStatus,
-      totalAmount: orders.totalAmount,
-      createdAt: orders.createdAt,
-      customerName: users.fullName,
-      customerEmail: users.email,
-    })
-    .from(orders)
-    .leftJoin(users, eq(orders.customerId, users.id))
-    .where(where)
-    .orderBy(desc(orders.createdAt));
+  const createMedicine = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    setFeedback("");
+    const form = new FormData(e.currentTarget);
 
-  const filtered = search
-    ? rows.filter((r) => r.customerName?.toLowerCase().includes(search.toLowerCase()) || r.id.includes(search))
-    : rows;
-
-  const statsRows = await db
-    .select({
-      totalOrders: count(orders.id),
-    })
-    .from(orders);
-
-  return ok("Orders loaded", {
-    items: filtered,
-    stats: {
-      totalOrders: statsRows[0]?.totalOrders ?? 0,
-      pending: rows.filter((r) => r.orderStatus === "Pending").length,
-      processing: rows.filter((r) => r.orderStatus === "Processing").length,
-      completed: rows.filter((r) => r.orderStatus === "Delivered").length,
-    },
-  });
-}
-
-export async function POST(req: Request) {
-  const auth = await requireAuth(req);
-  if (auth.error) return auth.error;
-
-  try {
-    const body = await req.json();
-    const parsed = checkoutSchema.safeParse(body);
-    if (!parsed.success) return fail("Order could not be placed.", 400);
-
-    const medicineIds = parsed.data.items.map((i) => i.medicineId);
-    const medRows = await db.select().from(medicines).where(inArray(medicines.id, medicineIds));
-
-    if (medRows.length !== medicineIds.length) {
-      return fail("One or more selected medicines are unavailable.", 400);
-    }
-
-    let total = 0;
-    const prepared = parsed.data.items.map((item) => {
-      const med = medRows.find((m) => m.id === item.medicineId)!;
-      const unitPrice = Number(med.price);
-      if (!med.isAvailable || med.quantityInStock < item.quantity) {
-        throw new Error(`Insufficient stock for ${med.name}`);
-      }
-      const subtotal = unitPrice * item.quantity;
-      total += subtotal;
-      return {
-        medicineId: med.id,
-        medicineName: med.name,
-        quantity: item.quantity,
-        unitPrice,
-        subtotal,
-        updatedStock: med.quantityInStock - item.quantity,
-      };
+    const res = await authFetch("/api/medicines", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: form.get("name"),
+        genericName: form.get("genericName"),
+        description: form.get("description"),
+        categoryId: form.get("categoryId") || null,
+        price: Number(form.get("price")),
+        quantityInStock: Number(form.get("quantityInStock")),
+        dosage: form.get("dosage"),
+        manufacturer: form.get("manufacturer"),
+        image: form.get("image") || "/images/pharmacy-hero.png",
+        expiryDate: form.get("expiryDate"),
+        requiresPrescription: form.get("requiresPrescription") === "on",
+        isAvailable: true,
+      }),
     });
+    const payload = await res.json();
+    setFeedback(payload.message);
 
-    const [createdOrder] = await db
-      .insert(orders)
-      .values({
-        customerId: auth.session.userId,
-        totalAmount: String(total),
-        deliveryAddress: parsed.data.deliveryAddress,
-        phoneNumber: parsed.data.phoneNumber,
-        paymentStatus: parsed.data.paymentStatus,
-        orderStatus: "Pending",
-      })
-      .returning();
-
-    for (const p of prepared) {
-      await db.insert(orderItems).values({
-        orderId: createdOrder.id,
-        medicineId: p.medicineId,
-        medicineName: p.medicineName,
-        quantity: p.quantity,
-        unitPrice: String(p.unitPrice),
-        subtotal: String(p.subtotal),
-      });
-
-      await db.update(medicines).set({ quantityInStock: p.updatedStock, updatedAt: new Date() }).where(eq(medicines.id, p.medicineId));
+    if (payload.success) {
+      e.currentTarget.reset();
+      await load();
     }
+  };
 
-    return ok("Order placed successfully", createdOrder);
-  } catch (error) {
-    if (error instanceof Error && error.message.includes("Insufficient stock")) {
-      return fail("Insufficient stock.", 400);
-    }
-    return fail("Order could not be placed.", 500);
-  }
+  const updateMedicine = async (id: string) => {
+    const med = medicines.find((m) => m.id === id);
+    const draft = drafts[id];
+    if (!med || !draft) return;
+
+    const res = await authFetch(`/api/medicines/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...med,
+        image: (med.image ?? "/images/pharmacy-hero.png").trim() || "/images/pharmacy-hero.png",
+        price: Number(draft.price),
+        quantityInStock: Number(draft.quantityInStock),
+      }),
+    });
+    const payload = await res.json();
+    setFeedback(payload.message);
+    await load();
+  };
+
+  const deactivate = async () => {
+    if (!removeId) return;
+    await authFetch(`/api/medicines/${removeId}`, { method: "DELETE" });
+    setRemoveId(null);
+    await load();
+  };
+
+  return (
+    <div className="space-y-6">
+      <h1 className="text-3xl font-bold">Manage Medicines</h1>
+
+      {feedback ? (
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm font-medium text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300">
+          {feedback}
+        </div>
+      ) : null}
+
+      <form className="grid gap-2 rounded-xl border bg-white p-4 md:grid-cols-3 dark:bg-slate-900" onSubmit={createMedicine}>
+        <input name="name" required placeholder="Medicine name" className="rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-800" />
+        <input name="genericName" required placeholder="Generic name" className="rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-800" />
+        <input name="price" required type="number" min="1" step="0.01" placeholder="Price" className="rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-800" />
+        <input name="quantityInStock" required type="number" min="0" placeholder="Stock" className="rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-800" />
+        <select name="categoryId" className="rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-800">
+          <option value="">No category</option>
+          {categories.map((c) => (
+            <option key={c.id} value={c.id}>{c.name}</option>
+          ))}
+        </select>
+        <input name="dosage" required placeholder="Dosage" className="rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-800" />
+        <input name="manufacturer" required placeholder="Manufacturer" className="rounded-lg border px-3 py-2 md:col-span-2 dark:border-slate-700 dark:bg-slate-800" />
+        <input name="image" placeholder="Image URL" className="rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-800" />
+        <input name="expiryDate" required type="date" className="rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-800" />
+        <label className="flex items-center gap-2 rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-800">
+          <input type="checkbox" name="requiresPrescription" />
+          Requires prescription
+        </label>
+        <Button type="submit" className="md:col-span-3">Add Medicine</Button>
+      </form>
+
+      <div className="space-y-3">
+        {loading ? (
+          <p className="text-sm text-slate-500">Loading medicines...</p>
+        ) : medicines.length === 0 ? (
+          <p className="text-sm text-slate-500">No medicines found.</p>
+        ) : (
+          medicines.map((med) => (
+            <div key={med.id} className="rounded-xl border bg-white p-4 dark:bg-slate-900">
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <p className="font-semibold">{med.name}</p>
+                  <p className="text-sm text-slate-500">
+                    {med.isAvailable ? "Active" : "Inactive"} · {med.quantityInStock} in stock
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <Button onClick={() => updateMedicine(med.id)} variant="secondary">Save</Button>
+                  <Button onClick={() => setRemoveId(med.id)} variant="destructive">Deactivate</Button>
+                </div>
+              </div>
+
+              <div className="mt-3 grid gap-3 md:grid-cols-3">
+                <label className="text-sm">
+                  Price
+                  <input
+                    value={drafts[med.id]?.price ?? ""}
+                    onChange={(e) => setDrafts((prev) => ({ ...prev, [med.id]: { ...prev[med.id], price: e.target.value } }))}
+                    className="mt-1 w-full rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-800"
+                  />
+                </label>
+                <label className="text-sm">
+                  Stock
+                  <input
+                    value={drafts[med.id]?.quantityInStock ?? ""}
+                    onChange={(e) => setDrafts((prev) => ({ ...prev, [med.id]: { ...prev[med.id], quantityInStock: e.target.value } }))}
+                    className="mt-1 w-full rounded-lg border px-3 py-2 dark:border-slate-700 dark:bg-slate-800"
+                  />
+                </label>
+                <div className="text-sm">
+                  <p>Price preview</p>
+                  <p className="mt-1 font-semibold">{formatNaira(Number(drafts[med.id]?.price ?? med.price))}</p>
+                </div>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      <ConfirmationModal
+        open={!!removeId}
+        title="Deactivate medicine"
+        description="This will hide the medicine from the public catalogue and set stock to zero."
+        confirmLabel="Deactivate"
+        onCancel={() => setRemoveId(null)}
+        onConfirm={() => {
+          void deactivate();
+        }}
+      />
+    </div>
+  );
 }
