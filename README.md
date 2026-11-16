@@ -2,7 +2,7 @@
 
 A full-stack pharmacy ordering application built with Next.js, PostgreSQL, and Drizzle ORM. This MVP is designed for a Nigerian pharmacy context and supports customer shopping, order management, admin workflows, and secure authentication.
 
-Live demo: https://pharmacy-ordering-app-mvp.vercel.app
+Live demo: https://pharmacy-ordering-app-mvp-two.vercel.app
 
 ## Overview
 
